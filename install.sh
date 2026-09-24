@@ -25,4 +25,9 @@ if ! command -v node >/dev/null 2>&1; then
   echo "⚠ node가 없습니다. 사주 계산 엔진을 쓰려면 Node.js를 설치하세요: https://nodejs.org"
 fi
 
+# 관상 모드(선택)는 python3 + mediapipe가 필요합니다.
+if ! python3 -c "import mediapipe" >/dev/null 2>&1; then
+  echo "ℹ 관상 모드를 쓰려면: pip install -r \"$CLAUDE_HOME/skills/bdev-saju/engine/requirements.txt\""
+fi
+
 echo "done. New Claude session: /bdev-saju  (또는: \"사주 봐줘\")"
