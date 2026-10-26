@@ -244,6 +244,12 @@ const shinsalSummary = [];
   }
 });
 lines.push('[신살] ' + (shinsalSummary.length ? shinsalSummary.join(' / ') : '주요 신살 없음'));
+const sibiLine = (key) => ['year','month','day','hour']
+  .map(k => result.manse && result.manse[k])
+  .map((m, i) => m && m.sibiShinsal ? `${['연지','월지','일지','시지'][i]} ${m.branchKo}: ${m.sibiShinsal[key]}` : null)
+  .filter(Boolean).join(' / ');
+lines.push('[12신살·연지 기준] ' + sibiLine('byYear'));
+lines.push('[12신살·일지 기준] ' + sibiLine('byDay'));
 lines.push('');
 lines.push('[사주닥터 점수]');
 lines.push(`의대 적성: ${medScore}/100`);

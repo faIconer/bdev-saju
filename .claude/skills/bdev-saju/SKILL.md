@@ -61,7 +61,8 @@ node "<SKILL>/engine/manse.cjs" "1995-08-15 14:30 남" --json
     - `counts.sinKangYak` (신강/신약/중화)
   - `kyukguk` (격국), `yongshin` (용신 오행 + 이유)
   - `daewoon` (10년 단위 대운 간지 + 시작나이)
-  - `manse.{year,month,day,hour}` (기둥별 십신·12운성·신살)
+  - `manse.{year,month,day,hour}` (기둥별 십신·12운성·신살). `sibiShinsal.byYear`/`byDay` = 그 기둥의 **12신살**(연지 기준/일지 기준)
+  - `sibiShinsal.byYear.table` / `byDay.table` — 12지지 전체 12신살 표. 대운·세운 지지의 신살을 여기서 조회
   - `result.ohaeng`/`result.shipsin` 의 **소수점 값은 내부 가중치다 — 절대 사용자에게 인용 금지** (아래 규칙 참고).
 
 엔진이 실패하면(미설치 등) `engine` 폴더에서 `npm install` 후 재시도. 절대 손으로 명식을 지어내지 않는다.
