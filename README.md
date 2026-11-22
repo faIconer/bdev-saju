@@ -61,6 +61,47 @@ bdev-saju는 **진태양시(경도) 보정을 기본으로 적용**한다 — `�
 
 > 예) 1995-08-15 **15:00**(서울) → 보정 없으면 申시(`庚申`), **−30분 보정하면 14:28 → 未시(`己未`)**. 경계 시각일수록 차이가 크다. 더 정확히 보려면 첫 풀이 전에 **출생지(시/도)** 를 알려주면 된다.
 
+## 계산 정확도 — 교차 검증
+
+명식 계산은 다른 오픈소스 만세력 엔진 두 곳([k-saju](https://github.com/bunhine0452/k-saju), [bazi-engine](https://github.com/bazi-atlas/bazi-engine))과 대조했다.
+
+| 검사 | 결과 |
+| --- | --- |
+| 무작위 1,500건 (1910~2049) 연·월·일주 | 두 엔진과 모두 일치 |
+| 절기 경계 ±3분·±40분 4,409건 연·월주 | k-saju와 전부 일치 |
+| 한국 서머타임(1948~60, 1987~88)·UTC+8:30(1954~61) | 출생 시각에서 자동 보정 |
+
+- 절기는 **순간**으로 판정한다. 2024년 입춘은 2월 4일 17:27이라, 17:20생은 아직 계묘년이다.
+- 회귀 테스트: `node .claude/skills/bdev-saju/engine/test/run.cjs` (두 엔진이 합의한 절기 경계 259건 + 신살 표 검산 포함)
+
+## 신살·합충·세운·궁합
+
+- **신살** — 천을·천덕·월덕·태극·문창·학당·국인·금여·건록·암록·천의·홍란·천희·홍염·양인·괴강·백호·고신·과숙·현침·귀문·원진·음양차착·십악대패·공망, 그리고 12신살. 학파마다 갈리는 부분(괴강 범위, 태극귀인 기준, 현침 성립 조건 등)은 결과에 함께 적는다.
+- **형충회합파해** — 천간합·충, 육합·삼합·반합·방합·암합, 충·형·파·해·원진·귀문.
+- **지장간·납음·공망**
+- **세운** — `세운2028`을 붙이면 그해 간지와 원국의 관계.
+- **궁합** — `--with "상대 생년월일시"`로 두 사람 원국 사이 관계를 한 번에.
+
+```bash
+node .claude/skills/bdev-saju/engine/manse.cjs "1987-05-22 09:00 남 서울" 세운2027
+node .claude/skills/bdev-saju/engine/manse.cjs "1987-05-22 09:00 남 서울" --with "1992-12-22 07:26 여 서울"
+```
+
+신살 표는 bazi-engine(MIT)의 표와 sungheeyoon/saju의 표를 항목마다 대조했고, 서로 유도되는 표(문창=건록+3, 암록=건록의 육합, 학당=장생지 등)는 테스트로 검산한다.
+
+## 관상 모드 (베타)
+
+얼굴 사진을 주면서 **"관상 봐줘"** 라고 하면 관상 풀이를 합니다. 사주처럼 **먼저 엔진으로 재고 그 결과로만 해석**합니다.
+
+- **측정** — `engine/gwansang.py`가 [MediaPipe](https://github.com/google-ai-edge/mediapipe) 얼굴 랜드마크(478점)로 삼정 비율, 얼굴형 오행(목·화·토·금·수), 눈·눈썹·코·입·턱, 좌우 대칭을 등급으로 매깁니다.
+- **해석** — `references/gwansang.md` 규칙으로 8장 풀이. 사주 명식이 있으면 **얼굴형 오행 × 일간·용신**을 엮어서 봅니다.
+- **한계** — 귀·기색·점은 측정하지 않고, 사진 각도·표정에 따라 결과가 흔들립니다. 정면 무표정 사진을 권장합니다. 관상은 재미·참고용입니다.
+
+```bash
+pip install -r .claude/skills/bdev-saju/engine/requirements.txt   # 관상 모드만 Python 필요
+python3 .claude/skills/bdev-saju/engine/gwansang.py 내사진.jpg
+```
+
 ## 안전 원칙
 
 점집이 아니라 **참고용 분석 도구**다.
@@ -100,5 +141,5 @@ bash install.sh          # ~/.claude/skills/bdev-saju 로 복사
 
 <p align="center">
   <sub>비개발자 전성시대 · made by <a href="https://www.threads.com/@be_realdeveloper">@be_realdeveloper</a></sub><br>
-  <sub>만세력 엔진은 <a href="https://github.com/6tail/lunar-javascript">lunar-javascript</a>(MIT)를 사용합니다.</sub>
+  <sub>만세력 엔진은 <a href="https://github.com/6tail/lunar-javascript">lunar-javascript</a>(MIT)를 사용합니다. 신살 표 일부는 <a href="https://github.com/bazi-atlas/bazi-engine">bazi-engine</a>(MIT)에서 옮겼습니다 — <a href="THIRD_PARTY_NOTICES.md">THIRD_PARTY_NOTICES</a></sub>
 </p>

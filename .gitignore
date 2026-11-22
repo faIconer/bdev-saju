@@ -1,2 +1,4 @@
 .omc/
 .DS_Store
+.claude/skills/bdev-saju/engine/models/
+__pycache__/

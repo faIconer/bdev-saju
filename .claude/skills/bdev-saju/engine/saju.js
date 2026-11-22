@@ -132,7 +132,7 @@
     // 1) 양력으로 변환
     let solar;
     if (isLunar) {
-      const lunar = global.Lunar.fromYmdHms(year, month, day, hour, minute, 0);
+      const lunar = global.Lunar.fromYmdHms(year, isLeap ? -month : month, day, hour, minute, 0);
       solar = lunar.getSolar();
     } else {
       solar = global.Solar.fromYmdHms(year, month, day, hour, minute, 0);
@@ -141,8 +141,12 @@
 
     // 2) 사주팔자 (EightChar)
     const ec = lunar.getEightChar();
-    const yearPillar  = { stem: ec.getYearGan(),  branch: ec.getYearZhi() };
-    const monthPillar = { stem: ec.getMonthGan(), branch: ec.getMonthZhi() };
+    // 연주·월주·대운은 절기 기준. jieqi = 출생 순간을 UTC+8 시계로 나타낸 값(lunar-javascript 절기 기준 시간대).
+    // 없으면 입력 시각을 그대로 쓴다.
+    const j = input.jieqi;
+    const ecJ = j ? global.Solar.fromYmdHms(j.year, j.month, j.day, j.hour, j.minute, 0).getLunar().getEightChar() : ec;
+    const yearPillar  = { stem: ecJ.getYearGan(),  branch: ecJ.getYearZhi() };
+    const monthPillar = { stem: ecJ.getMonthGan(), branch: ecJ.getMonthZhi() };
     const dayPillar   = { stem: ec.getDayGan(),   branch: ec.getDayZhi() };
     const hourPillar  = { stem: ec.getTimeGan(),  branch: ec.getTimeZhi() };
 
@@ -233,7 +237,7 @@
     }
 
     // 7) 대운 (10년 단위, 8개)
-    const yun = ec.getYun(gender === '남' ? 1 : 0);
+    const yun = ecJ.getYun(gender === '남' ? 1 : 0);
     const daewoonList = yun.getDaYun().slice(0, 9).map(d => ({
       startYear: d.getStartYear(),
       startAge: d.getStartAge(),
@@ -408,6 +412,25 @@
   const SHINSAL_HWAGAE = { '寅':'戌','午':'戌','戌':'戌','申':'辰','子':'辰','辰':'辰','亥':'未','卯':'未','未':'未','巳':'丑','酉':'丑','丑':'丑' };
   const SHINSAL_JANGSEONG = { '寅':'午','午':'午','戌':'午','申':'子','子':'子','辰':'子','亥':'卯','卯':'卯','未':'卯','巳':'酉','酉':'酉','丑':'酉' };
 
+  // 12신살 — 기준 지지의 삼합 그룹에서 겁살(절지)부터 순행
+  const BRANCH_ORDER = ['子','丑','寅','卯','辰','巳','午','未','申','酉','戌','亥'];
+  const SIBI_SHINSAL_NAMES = ['겁살','재살','천살','지살','연살','월살','망신살','장성살','반안살','역마살','육해살','화개살'];
+  const SIBI_GEOPSAL_START = { '申':'巳','子':'巳','辰':'巳','寅':'亥','午':'亥','戌':'亥','巳':'寅','酉':'寅','丑':'寅','亥':'申','卯':'申','未':'申' };
+
+  function getSibiShinsal(baseBranch, branch) {
+    const start = SIBI_GEOPSAL_START[baseBranch];
+    if (!start || BRANCH_ORDER.indexOf(branch) < 0) return null;
+    const idx = (BRANCH_ORDER.indexOf(branch) - BRANCH_ORDER.indexOf(start) + 12) % 12;
+    return SIBI_SHINSAL_NAMES[idx];
+  }
+
+  // 기준 지지 하나에 대한 12지지 전체 표 (대운·세운 지지 조회용)
+  function sibiShinsalTable(baseBranch) {
+    const table = {};
+    BRANCH_ORDER.forEach(b => { table[b] = getSibiShinsal(baseBranch, b); });
+    return table;
+  }
+
   /**
    * 사주 결과에 위치별 십성/운성/신살을 추가 (만세력 표 렌더링용)
    */
@@ -433,6 +456,10 @@
         if (SHINSAL_YEONGMA[yearBranch] === branch) shinsals.push('역마');
         if (SHINSAL_HWAGAE[yearBranch] === branch) shinsals.push('화개');
         if (SHINSAL_JANGSEONG[yearBranch] === branch) shinsals.push('장성');
+        const sibiShinsal = {
+          byYear: getSibiShinsal(yearBranch, branch),
+          byDay: getSibiShinsal(result.palja.dayPillar.branch, branch)
+        };
 
         manse[k] = {
           stem, branch,
@@ -444,10 +471,15 @@
           stemShipsin, stemShipsinKo: stemShipsin ? SHIPSIN_KO[stemShipsin] : null,
           branchShipsin, branchShipsinKo: branchShipsin ? SHIPSIN_KO[branchShipsin] : null,
           unseong,
-          shinsals
+          shinsals,
+          sibiShinsal
         };
       });
       result.manse = manse;
+      result.sibiShinsal = {
+        byYear: { base: yearBranch, table: sibiShinsalTable(yearBranch) },
+        byDay: { base: result.palja.dayPillar.branch, table: sibiShinsalTable(result.palja.dayPillar.branch) }
+      };
       return result;
     } catch (e) {
       console.error('[enrichManse]', e);
