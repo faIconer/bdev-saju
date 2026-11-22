@@ -23,6 +23,10 @@
      서울|부산|대구|… (도시명)               출생지 경도로 보정
      경도127.0 | --lon=127.0                  경도 직접 지정
      표준시 | --no-lon                        보정 끄기(시계 시각 그대로)
+     [추가 옵션]
+     세운2028 | --year=2028                   그해 세운과 원국의 관계
+     --with <상대 생년월일시 토큰…>           궁합: 두 사람 원국 사이 합·충·형·파·해·원진·귀문
+       예) node manse.cjs "1987-05-22 09:00 남 서울" --with "1992-12-22 07:26 여 서울"
    ============================================================ */
 
 const path = require('path');
@@ -38,6 +42,7 @@ globalThis.Solar = Solar;
 globalThis.Lunar = Lunar;
 require(path.join(__dirname, 'saju.js'));
 const SD = globalThis.SajuDoctor;
+const Extras = require(path.join(__dirname, 'extras.js'));
 
 const pad2 = (n) => String(n).padStart(2, '0');
 
@@ -73,6 +78,7 @@ function parse(argv) {
     // 경도 보정 옵션
     else if (/^(--no-lon|--표준시|표준시|시계시각|무보정|보정없음)$/.test(t)) { a.lonOff = true; }
     else if ((m = t.match(/^(?:--lon=?|경도)(\d{2,3}(?:\.\d+)?)$/))) { a.lon = +m[1]; a.lonLabel = `경도 ${m[1]}°E`; }
+    else if ((m = t.match(/^(?:--year=|세운)(\d{4})$/))) { a.sewoonYear = +m[1]; }
     else if (CITY_LON[t] != null) { a.lon = CITY_LON[t]; a.lonLabel = `${t} ${CITY_LON[t]}°E`; }
     else rest.push(t);
   }
@@ -175,6 +181,7 @@ function compute(argv) {
       gender: a.gender, isLunar: false, jieqi: a.jieqiInstant
     });
     SD.enrichManse(result);
+    result.extras = Extras.analyzeExtras(result.palja);
   } catch (e) {
     fail('명식 계산 실패: ' + (e && e.message ? e.message : e));
   }
@@ -241,7 +248,9 @@ function compute(argv) {
     return { ohaeng, ohaengGrade, lacking, shipsinDetail, shipsinGroup, shipsinGroupGrade, missingShipsin, sinKangYak };
   }
   const counts = buildCounts(result);
-  return { input: a, result, counts, scores: { medical: medScore, marriage: marScore } };
+  const out = { input: a, result, counts, scores: { medical: medScore, marriage: marScore } };
+  if (a.sewoonYear) out.sewoon = Extras.sewoon(result.palja, a.sewoonYear);
+  return out;
 }
 
 function formatText(out) {
@@ -292,6 +301,8 @@ function formatText(out) {
     .filter(Boolean).join(' / ');
   lines.push('[12신살·연지 기준] ' + sibiLine('byYear'));
   lines.push('[12신살·일지 기준] ' + sibiLine('byDay'));
+  lines.push(...formatExtras(result));
+  if (out.sewoon) lines.push(...formatSewoon(out.sewoon));
   lines.push('');
   lines.push('[사주닥터 점수]');
   lines.push(`의대 적성: ${medScore}/100`);
@@ -307,17 +318,64 @@ function formatText(out) {
   return lines.join('\n');
 }
 
+
+const PILLAR_LABEL = { year: '연', month: '월', day: '일', hour: '시' };
+function formatExtras(result) {
+  const e = result.extras, L = [];
+  L.push('');
+  L.push('[지장간] ' + ['year', 'month', 'day', 'hour'].map((k) => {
+    const j = e.jijanggan[k]; const b = result.palja[k + 'Pillar'].branch;
+    return `${PILLAR_LABEL[k]}지 ${b}: ${[j.여기 && '여기 ' + j.여기, j.중기 && '중기 ' + j.중기, '정기 ' + j.정기].filter(Boolean).join('·')}`;
+  }).join(' / '));
+  L.push('[납음] ' + ['year', 'month', 'day', 'hour'].map((k) => { const p = result.palja[k + 'Pillar']; return `${PILLAR_LABEL[k]}주 ${p.stem}${p.branch} ${e.nabeum[k]}`; }).join(' / '));
+  for (const kind of ['길신', '흉살', '중립']) {
+    const hs = e.sinsal.list.filter((h) => h.kind === kind);
+    if (hs.length) L.push(`[신살·${kind}] ` + hs.map((h) => `${h.name}(${h.where.join('·')}; ${h.basis}${h.note ? '; ' + h.note : ''})`).join(' / '));
+  }
+  if (!e.sinsal.list.length) L.push('[신살] 해당 없음');
+  L.push('[형충회합파해] ' + (e.relations.length ? e.relations.map(fmtRel).join(' / ') : '없음'));
+  return L;
+}
+function fmtRel(r) {
+  return `${r.chars} ${r.type}${r.element ? '(' + r.element + ')' : ''} @${r.where.join('-')}${r.note ? ' [' + r.note + ']' : ''}`;
+}
+function formatSewoon(w) {
+  return ['', `[세운 ${w.year}년 ${w.ganzhi}] 천간 ${w.stemShipsin} · 지지 ${w.branchShipsin} · 12운성 ${w.unseong} · 12신살 ${w.sibiShinsal.byYear}(연지 기준)/${w.sibiShinsal.byDay}(일지 기준) · 납음 ${w.nabeum}`
+    + (w.gongmang ? ' · 공망 해' : '') + (w.sinsal.length ? ' · 신살 ' + w.sinsal.join('·') : ''),
+    '  원국과의 관계: ' + (w.relations.length ? w.relations.map(fmtRel).join(' / ') : '없음'),
+    '  ※ 연도 간지는 입춘 기준 — 그해 입춘 전은 전년도 세운'];
+}
+function formatCompare(c, labels) {
+  const L = ['', `═══ 궁합 관계 (${labels[0]} × ${labels[1]}) ═══`];
+  L.push(`[일간] ${c.dayMaster.chars}: ${c.dayMaster.relations.map((r) => r.type + (r.element ? '(' + r.element + ')' : '')).join('·') || '합·충 없음'} — ${c.dayMaster.shipsin.join(', ')}`);
+  L.push(`[일지(배우자궁)] ${c.dayBranch.chars}: ${c.dayBranch.relations.map((r) => r.type + (r.element ? '(' + r.element + ')' : '')).join('·') || '관계 없음'}`);
+  L.push('[전체] ' + (c.all.length ? c.all.map(fmtRel).join(' / ') : '없음'));
+  return L;
+}
+
 module.exports = { compute, formatText, InputError };
 
 if (require.main === module) {
   let out;
   try {
-    out = compute(process.argv.slice(2));
+    const args = process.argv.slice(2);
+    const wi = args.findIndex((t) => t === '--with' || t === '궁합');
+    out = compute(wi < 0 ? args : args.slice(0, wi));
+    if (wi >= 0) {
+      const other = compute(args.slice(wi + 1));
+      const labels = ['본인', '상대'];
+      out.compare = { other, labels, relations: Extras.compare(out.result.palja, other.result.palja, labels) };
+    }
   } catch (e) {
     if (!(e instanceof InputError)) throw e;
     console.error('[입력 오류] ' + e.message);
     console.error('예) node manse.cjs "2008-03-15 06:30 남"   /   node manse.cjs "1996-11-02 여 음력"');
     process.exit(1);
   }
-  console.log(out.input.json ? JSON.stringify(out, null, 2) : formatText(out));
+  if (out.input.json) console.log(JSON.stringify(out, null, 2));
+  else {
+    let text = formatText(out);
+    if (out.compare) text += '\n\n' + formatText(out.compare.other) + '\n' + formatCompare(out.compare.relations, out.compare.labels).join('\n');
+    console.log(text);
+  }
 }

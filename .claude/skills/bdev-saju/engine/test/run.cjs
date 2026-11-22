@@ -42,5 +42,35 @@ for (const [inp, want, note] of cases) {
   check(`${inp} (${note})`, [p(r.yearPillar), p(r.monthPillar), p(r.dayPillar), p(r.hourPillar)].join(' '), want);
 }
 
+// 3) 신살·관계 표 (extras.js) — 표끼리 서로 유도되는 관계로 검산
+//    표 값 자체는 bazi-engine·sungheeyoon/saju와 전 항목 대조했다(README 참고)
+const X = require(path.join(__dirname, '..', 'extras.js'));
+const STEMS = ['甲','乙','丙','丁','戊','己','庚','辛','壬','癸'], BR = ['子','丑','寅','卯','辰','巳','午','未','申','酉','戌','亥'];
+const T = X.TABLES, step = (b, n) => BR[(BR.indexOf(b) + n) % 12];
+STEMS.forEach((s, i) => {
+  check(`문창 = 건록+3 (${s})`, T.문창귀인[i], step(T.건록[i], 3));
+  check(`금여 = 건록+2 (${s})`, T.금여[i], step(T.건록[i], 2));
+  if (i % 2 === 0) check(`양인 = 건록+1 (${s})`, T.양인[i], step(T.건록[i], 1));
+  check(`학당 = 장생지 (${s})`, X.unseongOf(s, T.학당귀인[i]), '장생');
+  check(`건록 = 12운성 건록 (${s})`, X.unseongOf(s, T.건록[i]), '건록');
+  check(`암록 = 건록의 육합 (${s})`, X.branchPair(T.건록[i], T.암록[i]).some((r) => r.type === '육합'), true);
+});
+const JZ = Array.from({ length: 60 }, (_, i) => STEMS[i % 10] + BR[i % 12]);
+const voids = JZ.filter((_, i) => i % 10 === 0).flatMap((g) => X.gongmang(g));
+check('공망: 여섯 순에서 12지지가 한 번씩', [...new Set(voids)].length + '/' + voids.length, '12/12');
+const shiE = JZ.filter((g) => X.gongmang(g).includes(T.건록[STEMS.indexOf(g[0])]));
+check('십악대패 = 일간 건록이 공망인 일주', shiE.sort().join(), ['甲辰','乙巳','壬申','丙申','丁亥','庚辰','戊戌','癸亥','辛巳','己丑'].sort().join());
+const pairs = (t) => BR.flatMap((a, i) => BR.slice(i + 1).filter((b) => X.branchPair(a, b).some((r) => r.type === t)).map((b) => a + b)).sort();
+check('귀문과 원진은 4쌍이 같고 2쌍이 다르다', pairs('귀문').filter((x) => pairs('원진').includes(x)).length, 4);
+check('반합은 왕지를 껴야 한다(申辰 아님)', X.branchPair('申', '辰').some((r) => r.type === '반합'), false);
+check('반합 申子', X.branchPair('申', '子').some((r) => r.type === '반합'), true);
+const nab = X.nabeumOf('甲子') + X.nabeumOf('乙丑') + X.nabeumOf('壬戌') + X.nabeumOf('癸亥');
+check('납음 처음과 끝', nab, '해중금해중금대해수대해수');
+
+// 4) 가족 명식 스냅샷
+const snap = (inp) => { const e = X.analyzeExtras(compute([inp]).result.palja); return e.sinsal.list.map((h) => h.name).join(','); };
+check('남편 신살', snap('1987-05-22 09:00 남 서울'), '국인귀인,암록,태극귀인,천덕귀인,천의성,고신살,괴강살,음양차착살,십악대패,현침살');
+check('아내 신살', snap('1992-12-22 07:26 여 서울'), '천을귀인,학당귀인,양인,홍염살,태극귀인,월덕귀인,십악대패,현침살,귀문관살,원진살');
+
 console.log(`\n통과 ${pass} / 실패 ${failN}`);
 process.exit(failN ? 1 : 0);

@@ -110,12 +110,17 @@
     const add = (name, where, basis, note) => { if (where.length) hits.push({ name, kind: KIND[name] || '중립', where, basis, ...(note ? { note } : {}) }); };
     const branchHits = (targets) => POS.filter((k) => P[k] && targets.includes(P[k].branch)).map((k) => POS_KO[k] + '지');
 
-    ['천을귀인', '문창귀인', '태극귀인', '국인귀인', '금여', '건록', '암록', '학당귀인', '양인', '홍염살'].forEach((n) => {
+    ['천을귀인', '문창귀인', '국인귀인', '금여', '건록', '암록', '학당귀인', '양인', '홍염살'].forEach((n) => {
       const t = T[n][di]; if (!t) return;
       add(n, branchHits(t.split('')), `일간 ${ds}`,
         n === '천을귀인' && (ds === '庚' || ds === '辛') ? '학파에 따라 庚辛 모두 寅午로 보기도 함' :
         n === '양인' ? '양간만 적용(음간 양인은 학파 차이)' : null);
     });
+
+    // 태극귀인: 《연해자평》은 연간 기준만 인정, 현대 자료는 일간 기준도 쓴다 → 둘 다 내고 기준을 적는다
+    const ys = P.year.stem;
+    add('태극귀인', branchHits(T.태극귀인[STEMS.indexOf(ys)].split('')), `연간 ${ys}`, '《연해자평》 기준(연간)');
+    if (ys !== ds) add('태극귀인', branchHits(T.태극귀인[di].split('')), `일간 ${ds}`, '현대 통용(일간) 기준');
 
     // 월지 기준
     const mb = P.month.branch, mo = (bi(mb) + 10) % 12; // 寅월 = 0
@@ -147,11 +152,14 @@
       if (HYEONCHIM_CHARS.includes(P[k].stem)) hc.push(POS_KO[k] + '간');
       if (HYEONCHIM_CHARS.includes(P[k].branch)) hc.push(POS_KO[k] + '지');
     });
-    add('현침살', hc, '甲·辛·卯·午·申 글자', '학파에 따라 未도 포함');
+    if (hc.length) hits.push({ name: '현침살', kind: '중립', where: hc, basis: '甲·辛·卯·午·申 글자', count: hc.length, established: hc.length >= 3,
+      note: hc.length >= 3 ? '《오행정기》 기준(3글자 이상) 성립' : `${hc.length}글자 — 《오행정기》 기준(3글자 이상)으로는 불성립, 글자만 있어도 표시하는 현대 앱도 있음` });
 
     // 공망: 일주가 속한 순(旬)에서 빠진 두 지지
     const g = gongmang(P.day.gz);
     add('공망', POS.filter((k) => k !== 'day' && P[k] && g.includes(P[k].branch)).map((k) => POS_KO[k] + '지'), `일주 ${P.day.gz} (${g.join('')} 공망)`);
+    const gy = gongmang(P.year.gz);
+    add('공망', POS.filter((k) => k !== 'year' && P[k] && gy.includes(P[k].branch)).map((k) => POS_KO[k] + '지'), `연주 ${P.year.gz} (${gy.join('')} 공망)`, '연주 기준 공망(보조)');
 
     // 지지 쌍 신살(귀문·원진)은 relations에서 계산
     const rel = relations(palja);
@@ -186,7 +194,8 @@
   };
   const SAMHAP = [['申子辰', '水'], ['亥卯未', '木'], ['寅午戌', '火'], ['巳酉丑', '金']];
   const BANGHAP = [['寅卯辰', '木'], ['巳午未', '火'], ['申酉戌', '金'], ['亥子丑', '水']];
-  const HYEONG = [['寅巳申', '삼형(지세지형)'], ['丑戌未', '삼형(무은지형)']];
+  // 이름은 학파에 따라 서로 반대로 부른다(寅巳申=지세지형/무은지형). 묶음 자체는 이견 없음
+  const HYEONG = [['寅巳申', '寅巳申 삼형 중 두 글자'], ['丑戌未', '丑戌未 삼형 중 두 글자']];
   const JAHYEONG = ['辰', '午', '酉', '亥'];
   const pairKey = (table, a, b) => {
     if (Array.isArray(table)) return table.find((p) => (p[0] === a && p[1] === b) || (p[0] === b && p[1] === a));
@@ -204,12 +213,15 @@
     const out = [];
     const lh = pairKey(LIUHE_EL, a, b); if (lh) out.push({ type: '육합', element: LIUHE_EL[lh] });
     for (const [t, list] of Object.entries(PAIRS)) if (pairKey(list, a, b)) out.push({ type: t });
-    for (const [set, el] of SAMHAP) if (a !== b && set.includes(a) && set.includes(b)) out.push({ type: '반합', element: el, note: `${set} 삼합의 두 글자` });
+    let banhap = false;
+    for (const [set, el] of SAMHAP) {
+      if (a !== b && set.includes(a) && set.includes(b) && (a === set[1] || b === set[1])) { banhap = true; out.push({ type: '반합', element: el, note: `${set} 삼합 중 왕지 ${set[1]}를 낀 두 글자` }); }
+    }
     for (const [set, name] of HYEONG) if (a !== b && set.includes(a) && set.includes(b)) out.push({ type: '형', note: name });
     if ((a === '子' && b === '卯') || (a === '卯' && b === '子')) out.push({ type: '형', note: '자묘형(무례지형)' });
     if (a === b && JAHYEONG.includes(a)) out.push({ type: '형', note: '자형' });
-    // 암합: 두 지지의 정기끼리 천간합 (이미 육합인 쌍은 제외)
-    if (!lh) { const m = pairKey(STEM_HAP, MAIN_STEM[a], MAIN_STEM[b]); if (m && a !== b) out.push({ type: '암합', element: STEM_HAP[m], note: `정기 ${MAIN_STEM[a]}${MAIN_STEM[b]} 합` }); }
+    // 암합: 두 지지의 정기끼리 천간합 (이미 육합·반합인 쌍은 제외). 대조할 외부 표가 없어 유도값이다
+    if (!lh && !banhap) { const m = pairKey(STEM_HAP, MAIN_STEM[a], MAIN_STEM[b]); if (m && a !== b) out.push({ type: '암합', element: STEM_HAP[m], note: `정기 ${MAIN_STEM[a]}${MAIN_STEM[b]} 합` }); }
     return out;
   }
 
@@ -240,8 +252,9 @@
         branchPair(A.branch, B.branch).forEach((r) => out.push({ ...r, chars: A.branch + B.branch, where: [POS_KO[keys[i]] + '지', POS_KO[keys[j]] + '지'] }));
       }
     }
-    groupRelations(keys.map((k) => ({ ch: P[k].branch, where: POS_KO[k] + '지' }))).forEach((r) => out.push(r));
-    return out;
+    const groups = groupRelations(keys.map((k) => ({ ch: P[k].branch, where: POS_KO[k] + '지' })));
+    const full = groups.filter((r) => r.type === '삼합');
+    return out.filter((r) => !(r.type === '반합' && full.some((f) => r.where.every((w) => f.where.includes(w))))).concat(groups);
   }
 
   // ---------- 두 사람 사이 관계 (궁합용) ----------
