@@ -132,7 +132,7 @@
     // 1) 양력으로 변환
     let solar;
     if (isLunar) {
-      const lunar = global.Lunar.fromYmdHms(year, month, day, hour, minute, 0);
+      const lunar = global.Lunar.fromYmdHms(year, isLeap ? -month : month, day, hour, minute, 0);
       solar = lunar.getSolar();
     } else {
       solar = global.Solar.fromYmdHms(year, month, day, hour, minute, 0);
@@ -141,8 +141,12 @@
 
     // 2) 사주팔자 (EightChar)
     const ec = lunar.getEightChar();
-    const yearPillar  = { stem: ec.getYearGan(),  branch: ec.getYearZhi() };
-    const monthPillar = { stem: ec.getMonthGan(), branch: ec.getMonthZhi() };
+    // 연주·월주·대운은 절기 기준. jieqi = 출생 순간을 UTC+8 시계로 나타낸 값(lunar-javascript 절기 기준 시간대).
+    // 없으면 입력 시각을 그대로 쓴다.
+    const j = input.jieqi;
+    const ecJ = j ? global.Solar.fromYmdHms(j.year, j.month, j.day, j.hour, j.minute, 0).getLunar().getEightChar() : ec;
+    const yearPillar  = { stem: ecJ.getYearGan(),  branch: ecJ.getYearZhi() };
+    const monthPillar = { stem: ecJ.getMonthGan(), branch: ecJ.getMonthZhi() };
     const dayPillar   = { stem: ec.getDayGan(),   branch: ec.getDayZhi() };
     const hourPillar  = { stem: ec.getTimeGan(),  branch: ec.getTimeZhi() };
 
@@ -233,7 +237,7 @@
     }
 
     // 7) 대운 (10년 단위, 8개)
-    const yun = ec.getYun(gender === '남' ? 1 : 0);
+    const yun = ecJ.getYun(gender === '남' ? 1 : 0);
     const daewoonList = yun.getDaYun().slice(0, 9).map(d => ({
       startYear: d.getStartYear(),
       startAge: d.getStartAge(),

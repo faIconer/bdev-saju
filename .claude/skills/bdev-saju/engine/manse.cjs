@@ -44,8 +44,7 @@ const pad2 = (n) => String(n).padStart(2, '0');
 // ---------- 경도(진태양시) 보정 ----------
 // 한국 표준시(KST)는 동경 135°(일본 아카시) 기준인데, 한국 실제 위치는 약 127°라
 // 진태양시가 시계보다 늦다. 보정(분) = (실제경도 − 135) × 4분/도. 서울이면 약 −32분.
-// 절기·일진은 그대로, 오직 "시각"만 보정되어 시지/시간(천간) 경계가 정확해진다.
-const KST_MERIDIAN = 135;
+// 보정은 일주·시주에만 적용한다. 연주·월주는 절기 순간으로 판정한다(아래 "시각 환산").
 const CITY_LON = {
   '서울': 126.98, '인천': 126.70, '수원': 127.03, '춘천': 127.73, '강릉': 128.90,
   '대전': 127.39, '세종': 127.29, '청주': 127.49, '천안': 127.11, '전주': 127.15,
@@ -54,14 +53,13 @@ const CITY_LON = {
   '평양': 125.75, '개성': 126.55
 };
 const DEFAULT_LON = CITY_LON['서울']; // 출생지 미상 시 서울 기준
-function lonOffsetMin(lon) { return Math.round((lon - KST_MERIDIAN) * 4); }
 
 // ---------- 입력 파싱 ----------
 function parse(argv) {
   const a = { gender: '', genderGiven: false, isLunar: false, isLeap: false, json: false, hour: null, minute: 0, hourGiven: false };
   const rest = [];
   // 각 인자를 공백으로도 분해 (따옴표로 묶인 "2008-03-15 06:30 남" 대응)
-  const tokens = argv.slice(2).flatMap(s => String(s).split(/\s+/)).filter(Boolean);
+  const tokens = argv.flatMap(s => String(s).split(/\s+/)).filter(Boolean);
   for (const raw of tokens) {
     const t = raw.trim();
     if (!t) continue;
@@ -93,173 +91,233 @@ function parse(argv) {
   return a;
 }
 
-function fail(msg) {
-  console.error('[입력 오류] ' + msg);
-  console.error('예) node manse.cjs "2008-03-15 06:30 남"   /   node manse.cjs "1996-11-02 여 음력"');
-  process.exit(1);
+class InputError extends Error {}
+function fail(msg) { throw new InputError(msg); }
+
+// ---------- 시각 환산 ----------
+// 1) 입력(양/음력 시계 시각) → 양력 시계 시각
+// 2) 한국 시간대 이력(서머타임·UTC+8:30 시기 포함)으로 실제 UTC 순간을 구한다
+// 3) 연주·월주(절기)는 그 순간을 lunar-javascript 기준 시간대(UTC+8, 중국 표준시)로 바꿔 판정한다
+//    → lunar-javascript의 절기 시각은 UTC+8 기준이라, 한국 시각을 그대로 넣으면 절기 직전 최대 1시간이 틀린다
+// 4) 일주·시주는 진태양시(경도 기준 지방평균시) 또는 표준시(서머타임 제거)로 판정한다
+const KOREA_TZ = [ // [적용 시작(UTC), UTC 오프셋(분), 서머타임 여부] — IANA tzdata Asia/Seoul
+  [Date.UTC(1908, 2, 31, 16), 510, false],
+  [Date.UTC(1911, 11, 31, 15), 540, false],
+  [Date.UTC(1948, 4, 31, 15), 600, true], [Date.UTC(1948, 8, 12, 14), 540, false],
+  [Date.UTC(1949, 3, 2, 15), 600, true], [Date.UTC(1949, 8, 10, 14), 540, false],
+  [Date.UTC(1950, 2, 31, 15), 600, true], [Date.UTC(1950, 8, 9, 14), 540, false],
+  [Date.UTC(1951, 4, 5, 15), 600, true], [Date.UTC(1951, 8, 8, 14), 540, false],
+  [Date.UTC(1954, 2, 20, 15), 510, false],
+  [Date.UTC(1955, 4, 4, 16), 570, true], [Date.UTC(1955, 8, 8, 15), 510, false],
+  [Date.UTC(1956, 4, 19, 16), 570, true], [Date.UTC(1956, 8, 29, 15), 510, false],
+  [Date.UTC(1957, 4, 4, 16), 570, true], [Date.UTC(1957, 8, 21, 15), 510, false],
+  [Date.UTC(1958, 4, 3, 16), 570, true], [Date.UTC(1958, 8, 20, 15), 510, false],
+  [Date.UTC(1959, 4, 2, 16), 570, true], [Date.UTC(1959, 8, 19, 15), 510, false],
+  [Date.UTC(1960, 3, 30, 16), 570, true], [Date.UTC(1960, 8, 17, 15), 510, false],
+  [Date.UTC(1961, 7, 9, 16), 540, false],
+  [Date.UTC(1987, 4, 9, 17), 600, true], [Date.UTC(1987, 9, 10, 17), 540, false],
+  [Date.UTC(1988, 4, 7, 17), 600, true], [Date.UTC(1988, 9, 8, 17), 540, false],
+];
+function koreaTzAt(utcMs) {
+  let cur = { offset: 508, dst: false }; // 1908년 이전: 서울 지방평균시(+8:27:52)
+  for (const [t, offset, dst] of KOREA_TZ) { if (utcMs >= t) cur = { offset, dst }; else break; }
+  return cur;
 }
+function wallToUtc(y, m, d, h, mi) {
+  const wall = Date.UTC(y, m - 1, d, h, mi);
+  let utc = wall - 540 * 60000;
+  for (let i = 0; i < 3; i++) utc = wall - koreaTzAt(utc).offset * 60000;
+  return utc;
+}
+const fields = (ms) => { const t = new Date(ms); return { year: t.getUTCFullYear(), month: t.getUTCMonth() + 1, day: t.getUTCDate(), hour: t.getUTCHours(), minute: t.getUTCMinutes() }; };
 
-const a = parse(process.argv);
-if (!a.year || !a.month || !a.day) fail('생년월일(YYYY-MM-DD)이 필요해.');
-if (!a.gender) a.gender = '남'; // 미상 시 가정(아래 경고)
-if (a.hour == null) { a.hour = 12; a.minute = 0; } // 시 미상 → 정오 가정
+/**
+ * 명식 계산. argv = 토큰 배열 (예: ['1987-05-22 09:00', '남', '서울']).
+ * 입력이 잘못되면 InputError를 던진다.
+ */
+function compute(argv) {
+  const a = parse(argv);
+  if (!a.year || !a.month || !a.day) fail('생년월일(YYYY-MM-DD)이 필요해.');
+  if (!a.gender) a.gender = '남'; // 미상 시 가정(아래 경고)
+  if (a.hour == null) { a.hour = 12; a.minute = 0; } // 시 미상 → 정오 가정
 
-// ---------- 진태양시 보정 적용 ----------
-// 입력(양/음력)을 양력 시각으로 환산한 뒤 경도 오프셋(분)만큼 시프트해서 계산한다.
-// 보정은 "시각"에만 적용 — 절기/일진 계산은 보정된 양력 시각 기준으로 자연스럽게 따라간다.
-a.offsetMin = 0;
-let calcInput = { year: a.year, month: a.month, day: a.day, hour: a.hour, minute: a.minute, isLunar: a.isLunar };
-if (!a.lonOff) {
-  if (a.lon == null) { a.lon = DEFAULT_LON; a.lonLabel = `서울(기본) ${DEFAULT_LON}°E`; }
-  a.offsetMin = lonOffsetMin(a.lon);
-  // 1) 입력 → 양력 분해
   let sy = a.year, sm = a.month, sd = a.day, sh = a.hour, smin = a.minute;
   if (a.isLunar) {
-    const s = Lunar.fromYmdHms(a.year, a.month, a.day, a.hour, a.minute, 0).getSolar();
+    let s;
+    try { s = Lunar.fromYmdHms(a.year, a.isLeap ? -a.month : a.month, a.day, a.hour, a.minute, 0).getSolar(); }
+    catch (e) { fail(a.isLeap ? `음력 ${a.year}년에는 윤${a.month}월이 없어.` : '음력 날짜가 올바르지 않아.'); }
     sy = s.getYear(); sm = s.getMonth(); sd = s.getDay(); sh = s.getHour(); smin = s.getMinute();
   }
-  a.solarBefore = { year: sy, month: sm, day: sd, hour: sh, minute: smin };
-  // 2) 분 시프트(날짜 넘김 자동 처리)
-  const d = new Date(sy, sm - 1, sd, sh, smin + a.offsetMin, 0);
-  a.solarAfter = { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(), hour: d.getHours(), minute: d.getMinutes() };
-  a.dateShifted = (a.solarAfter.day !== sd || a.solarAfter.month !== sm || a.solarAfter.year !== sy);
-  calcInput = { ...a.solarAfter, isLunar: false }; // 보정된 양력으로 계산
-}
-
-let result;
-try {
-  result = SD.analyze({
-    year: calcInput.year, month: calcInput.month, day: calcInput.day,
-    hour: calcInput.hour, minute: calcInput.minute,
-    gender: a.gender, isLunar: calcInput.isLunar, isLeap: a.isLeap
-  });
-  SD.enrichManse(result);
-} catch (e) {
-  fail('명식 계산 실패: ' + (e && e.message ? e.message : e));
-}
-
-// 점수 자체 계산 (saju.js의 동명 함수는 한자 변수명 + strict 충돌로 node에서 깨짐 → 동일 공식 재구현)
-function clamp(n) { return Math.max(0, Math.min(100, Math.round(n))); }
-function medicalScore(r) {
-  const sp = (k) => Number(r.shipsin[k]) || 0;
-  const inseong = sp('正印') + sp('偏印') * 0.7;
-  const siksin = sp('食神') + sp('傷官') * 0.5;
-  const gwan = sp('正官') + sp('偏官') * 0.7;
-  const bi = sp('比肩') + sp('劫財') * 0.5;
-  let s = Math.min(inseong, 3) * 12 + Math.min(siksin, 2) * 10 + Math.min(gwan, 2) * 10 + Math.min(bi, 2) * 6;
-  const vals = ['木', '火', '土', '金', '水'].map(k => r.ohaeng[k]);
-  if (Math.max(...vals) - Math.min(...vals) < 3.5) s += 8;
-  const str = r.ohaeng[r.ilgan.ohaeng];
-  if (str < 1.5) s -= 8;
-  if (str > 5.5) s -= 5;
-  return clamp(s);
-}
-function marriageScore(r, gender) {
-  const sp = (k) => Number(r.shipsin[k]) || 0;
-  const gwan = sp('正官') + sp('偏官') * 0.8;
-  const jae = sp('正財') + sp('偏財') * 0.7;
-  const inseong = sp('正印') + sp('偏印') * 0.5;
-  let s = 0;
-  if (gender === '여') {
-    s += Math.min(gwan, 3) * 14 + Math.min(inseong, 2) * 8 + Math.min(jae, 2) * 6;
+  const wallMs = Date.UTC(sy, sm - 1, sd, sh, smin);
+  const utcMs = wallToUtc(sy, sm, sd, sh, smin);
+  const tz = koreaTzAt(utcMs);
+  a.utcOffsetMin = tz.offset;
+  a.dst = tz.dst;
+  let localMs;
+  if (a.lonOff) {
+    localMs = utcMs + (tz.dst ? tz.offset - 60 : tz.offset) * 60000; // 표준시: 서머타임만 제거
   } else {
-    s += Math.min(jae, 3) * 12 + Math.min(gwan, 2) * 8 + Math.min(inseong, 2) * 8;
+    if (a.lon == null) { a.lon = DEFAULT_LON; a.lonLabel = `서울(기본) ${DEFAULT_LON}°E`; }
+    localMs = utcMs + Math.round(a.lon * 4) * 60000; // 진태양시(지방평균시)
   }
-  if (['子', '卯', '酉', '午'].includes(r.palja.dayPillar.branch)) s += 8;
-  const str = r.ohaeng[r.ilgan.ohaeng];
-  if (str >= 2.0 && str <= 4.5) s += 6;
-  return clamp(s);
-}
-const medScore = medicalScore(result);
-const marScore = marriageScore(result, a.gender);
+  a.offsetMin = Math.round((localMs - wallMs) / 60000);
+  a.solarBefore = fields(wallMs);
+  a.solarAfter = fields(localMs);
+  a.dateShifted = (a.solarAfter.day !== sd || a.solarAfter.month !== sm || a.solarAfter.year !== sy);
+  a.jieqiInstant = fields(utcMs + 480 * 60000); // 절기 판정용(UTC+8)
+  const calcInput = { ...a.solarAfter, isLunar: false };
 
-// ---------- 개수 기반 요약 (소수점 가중치 대신 실제 글자 개수로 풀이) ----------
-// 일반 대중 사주는 "재성이 0.9" 같은 가중치를 절대 안 쓴다. 천간4+지지4 글자에서
-// 오행/십신이 몇 개 나타나는지(개수)로 강약을 말한다. 그 개수를 여기서 계산해 준다.
-function buildCounts(r) {
-  const pillars = ['year', 'month', 'day', 'hour'].map(k => r.manse && r.manse[k]).filter(Boolean);
-  const ohaeng = { 木: 0, 火: 0, 土: 0, 金: 0, 水: 0 };
-  pillars.forEach(p => { if (p.stemOhaeng) ohaeng[p.stemOhaeng]++; if (p.branchOhaeng) ohaeng[p.branchOhaeng]++; });
-  const GROUP = { 비견: '비겁', 겁재: '비겁', 식신: '식상', 상관: '식상', 편재: '재성', 정재: '재성', 편관: '관성', 정관: '관성', 편인: '인성', 정인: '인성' };
-  const shipsinDetail = { 비견: 0, 겁재: 0, 식신: 0, 상관: 0, 편재: 0, 정재: 0, 편관: 0, 정관: 0, 편인: 0, 정인: 0 };
-  const shipsinGroup = { 비겁: 0, 식상: 0, 재성: 0, 관성: 0, 인성: 0 };
-  pillars.forEach(p => {
-    [p.stemShipsinKo, p.branchShipsinKo].forEach(s => {
-      if (s && shipsinDetail.hasOwnProperty(s)) { shipsinDetail[s]++; shipsinGroup[GROUP[s]]++; }
+  let result;
+  try {
+    result = SD.analyze({
+      year: calcInput.year, month: calcInput.month, day: calcInput.day,
+      hour: calcInput.hour, minute: calcInput.minute,
+      gender: a.gender, isLunar: false, jieqi: a.jieqiInstant
     });
-  });
-  // 강약 등급(개수 기준): 0=없음, 1=약함, 2=보통, 3=강함, 4+=과다
-  const grade = (n) => n === 0 ? '없음' : n === 1 ? '약함' : n === 2 ? '보통' : n === 3 ? '강함' : '과다';
-  const ohaengGrade = {}; Object.keys(ohaeng).forEach(k => ohaengGrade[k] = grade(ohaeng[k]));
-  const shipsinGroupGrade = {}; Object.keys(shipsinGroup).forEach(k => shipsinGroupGrade[k] = grade(shipsinGroup[k]));
-  const lacking = Object.keys(ohaeng).filter(k => ohaeng[k] === 0);   // 아예 없는 오행
-  const missingShipsin = Object.keys(shipsinGroup).filter(k => shipsinGroup[k] === 0); // 없는 십신 그룹
-  // 신강/신약은 용신 reason에 이미 판정됨
-  const sinKangYak = /신강/.test((r.yongshin && r.yongshin.reason) || '') ? '신강'
-    : /신약/.test((r.yongshin && r.yongshin.reason) || '') ? '신약' : '중화';
-  return { ohaeng, ohaengGrade, lacking, shipsinDetail, shipsinGroup, shipsinGroupGrade, missingShipsin, sinKangYak };
-}
-const counts = buildCounts(result);
-
-if (a.json) {
-  console.log(JSON.stringify({ input: a, result, counts, scores: { medical: medScore, marriage: marScore } }, null, 2));
-  process.exit(0);
-}
-
-// ---------- 사람이 읽는 출력(봇이 그대로 참고) ----------
-const KO = SD.constants;
-const warns = [];
-if (!a.hourGiven) warns.push('시(時) 미상 → 정오로 가정함. 시주·일부 신살은 불확실 (정확히 보려면 태어난 시간 필요).');
-if (!a.genderGiven) warns.push('성별 미입력 → 남자로 가정함 (의사 인연 점수는 성별에 따라 달라짐).');
-
-const lines = [];
-lines.push('═══ 명식 계산 결과 (이 데이터에 근거해서만 답글 작성) ═══');
-lines.push(`[입력] ${a.isLunar ? '음력' : '양력'} ${a.year}-${pad2(a.month)}-${pad2(a.day)} ${a.hourGiven ? pad2(a.hour)+':'+pad2(a.minute) : '(시 미상)'} / ${a.gender}`);
-if (a.lonOff) {
-  lines.push('[진태양시 보정] 끄짐(표준시 그대로) — 시지 경계가 시계 시각 기준');
-} else if (a.offsetMin !== 0) {
-  const b = a.solarBefore, c = a.solarAfter;
-  const shift = a.dateShifted ? `, ${c.year}-${pad2(c.month)}-${pad2(c.day)}로 날짜 넘어감` : '';
-  lines.push(`[진태양시 보정] ${a.lonLabel} → ${a.offsetMin}분 적용  (계산시각 ${pad2(b.hour)}:${pad2(b.minute)} → ${pad2(c.hour)}:${pad2(c.minute)}${shift})`);
-}
-lines.push('');
-lines.push(SD.toPromptContext(result));
-lines.push('');
-lines.push('[오행 개수] (소수점 가중치 아님 — 실제 글자 개수로 풀이할 것)');
-lines.push(['木','火','土','金','水'].map(k => `${k} ${counts.ohaeng[k]}개(${counts.ohaengGrade[k]})`).join(' / '));
-if (counts.lacking.length) lines.push(`→ 아예 없는 오행: ${counts.lacking.join('·')}`);
-lines.push('[십신 그룹 개수]');
-lines.push(['비겁','식상','재성','관성','인성'].map(k => `${k} ${counts.shipsinGroup[k]}개(${counts.shipsinGroupGrade[k]})`).join(' / '));
-if (counts.missingShipsin.length) lines.push(`→ 없는 십신: ${counts.missingShipsin.join('·')}`);
-lines.push(`[신강/신약] ${counts.sinKangYak}`);
-lines.push('');
-
-// 신살 요약
-const shinsalSummary = [];
-['year','month','day','hour'].forEach(k => {
-  const m = result.manse && result.manse[k];
-  if (m && m.shinsals && m.shinsals.length) {
-    const pos = { year:'연지', month:'월지', day:'일지', hour:'시지' }[k];
-    shinsalSummary.push(`${pos} ${m.branchKo}: ${m.shinsals.join('·')}`);
+    SD.enrichManse(result);
+  } catch (e) {
+    fail('명식 계산 실패: ' + (e && e.message ? e.message : e));
   }
-});
-lines.push('[신살] ' + (shinsalSummary.length ? shinsalSummary.join(' / ') : '주요 신살 없음'));
-const sibiLine = (key) => ['year','month','day','hour']
-  .map(k => result.manse && result.manse[k])
-  .map((m, i) => m && m.sibiShinsal ? `${['연지','월지','일지','시지'][i]} ${m.branchKo}: ${m.sibiShinsal[key]}` : null)
-  .filter(Boolean).join(' / ');
-lines.push('[12신살·연지 기준] ' + sibiLine('byYear'));
-lines.push('[12신살·일지 기준] ' + sibiLine('byDay'));
-lines.push('');
-lines.push('[사주닥터 점수]');
-lines.push(`의대 적성: ${medScore}/100`);
-lines.push(`의사 인연: ${marScore}/100  (${a.gender} 기준)`);
-lines.push('');
-lines.push('[일주] ' + result.palja.dayPillar.stem + result.palja.dayPillar.branch +
-  ' (' + KO.STEM_KO[result.palja.dayPillar.stem] + KO.BRANCH_KO[result.palja.dayPillar.branch] + ')');
 
-if (warns.length) {
-  lines.push('');
-  lines.push('⚠ 주의: ' + warns.join(' / '));
+  // 점수 자체 계산 (saju.js의 동명 함수는 한자 변수명 + strict 충돌로 node에서 깨짐 → 동일 공식 재구현)
+  function clamp(n) { return Math.max(0, Math.min(100, Math.round(n))); }
+  function medicalScore(r) {
+    const sp = (k) => Number(r.shipsin[k]) || 0;
+    const inseong = sp('正印') + sp('偏印') * 0.7;
+    const siksin = sp('食神') + sp('傷官') * 0.5;
+    const gwan = sp('正官') + sp('偏官') * 0.7;
+    const bi = sp('比肩') + sp('劫財') * 0.5;
+    let s = Math.min(inseong, 3) * 12 + Math.min(siksin, 2) * 10 + Math.min(gwan, 2) * 10 + Math.min(bi, 2) * 6;
+    const vals = ['木', '火', '土', '金', '水'].map(k => r.ohaeng[k]);
+    if (Math.max(...vals) - Math.min(...vals) < 3.5) s += 8;
+    const str = r.ohaeng[r.ilgan.ohaeng];
+    if (str < 1.5) s -= 8;
+    if (str > 5.5) s -= 5;
+    return clamp(s);
+  }
+  function marriageScore(r, gender) {
+    const sp = (k) => Number(r.shipsin[k]) || 0;
+    const gwan = sp('正官') + sp('偏官') * 0.8;
+    const jae = sp('正財') + sp('偏財') * 0.7;
+    const inseong = sp('正印') + sp('偏印') * 0.5;
+    let s = 0;
+    if (gender === '여') {
+      s += Math.min(gwan, 3) * 14 + Math.min(inseong, 2) * 8 + Math.min(jae, 2) * 6;
+    } else {
+      s += Math.min(jae, 3) * 12 + Math.min(gwan, 2) * 8 + Math.min(inseong, 2) * 8;
+    }
+    if (['子', '卯', '酉', '午'].includes(r.palja.dayPillar.branch)) s += 8;
+    const str = r.ohaeng[r.ilgan.ohaeng];
+    if (str >= 2.0 && str <= 4.5) s += 6;
+    return clamp(s);
+  }
+  const medScore = medicalScore(result);
+  const marScore = marriageScore(result, a.gender);
+
+  // ---------- 개수 기반 요약 (소수점 가중치 대신 실제 글자 개수로 풀이) ----------
+  // 일반 대중 사주는 "재성이 0.9" 같은 가중치를 절대 안 쓴다. 천간4+지지4 글자에서
+  // 오행/십신이 몇 개 나타나는지(개수)로 강약을 말한다. 그 개수를 여기서 계산해 준다.
+  function buildCounts(r) {
+    const pillars = ['year', 'month', 'day', 'hour'].map(k => r.manse && r.manse[k]).filter(Boolean);
+    const ohaeng = { 木: 0, 火: 0, 土: 0, 金: 0, 水: 0 };
+    pillars.forEach(p => { if (p.stemOhaeng) ohaeng[p.stemOhaeng]++; if (p.branchOhaeng) ohaeng[p.branchOhaeng]++; });
+    const GROUP = { 비견: '비겁', 겁재: '비겁', 식신: '식상', 상관: '식상', 편재: '재성', 정재: '재성', 편관: '관성', 정관: '관성', 편인: '인성', 정인: '인성' };
+    const shipsinDetail = { 비견: 0, 겁재: 0, 식신: 0, 상관: 0, 편재: 0, 정재: 0, 편관: 0, 정관: 0, 편인: 0, 정인: 0 };
+    const shipsinGroup = { 비겁: 0, 식상: 0, 재성: 0, 관성: 0, 인성: 0 };
+    pillars.forEach(p => {
+      [p.stemShipsinKo, p.branchShipsinKo].forEach(s => {
+        if (s && shipsinDetail.hasOwnProperty(s)) { shipsinDetail[s]++; shipsinGroup[GROUP[s]]++; }
+      });
+    });
+    // 강약 등급(개수 기준): 0=없음, 1=약함, 2=보통, 3=강함, 4+=과다
+    const grade = (n) => n === 0 ? '없음' : n === 1 ? '약함' : n === 2 ? '보통' : n === 3 ? '강함' : '과다';
+    const ohaengGrade = {}; Object.keys(ohaeng).forEach(k => ohaengGrade[k] = grade(ohaeng[k]));
+    const shipsinGroupGrade = {}; Object.keys(shipsinGroup).forEach(k => shipsinGroupGrade[k] = grade(shipsinGroup[k]));
+    const lacking = Object.keys(ohaeng).filter(k => ohaeng[k] === 0);   // 아예 없는 오행
+    const missingShipsin = Object.keys(shipsinGroup).filter(k => shipsinGroup[k] === 0); // 없는 십신 그룹
+    // 신강/신약은 용신 reason에 이미 판정됨
+    const sinKangYak = /신강/.test((r.yongshin && r.yongshin.reason) || '') ? '신강'
+      : /신약/.test((r.yongshin && r.yongshin.reason) || '') ? '신약' : '중화';
+    return { ohaeng, ohaengGrade, lacking, shipsinDetail, shipsinGroup, shipsinGroupGrade, missingShipsin, sinKangYak };
+  }
+  const counts = buildCounts(result);
+  return { input: a, result, counts, scores: { medical: medScore, marriage: marScore } };
 }
-console.log(lines.join('\n'));
+
+function formatText(out) {
+  const { input: a, result, counts } = out;
+  const medScore = out.scores.medical, marScore = out.scores.marriage;
+  // ---------- 사람이 읽는 출력(봇이 그대로 참고) ----------
+  const KO = SD.constants;
+  const warns = [];
+  if (!a.hourGiven) warns.push('시(時) 미상 → 정오로 가정함. 시주·일부 신살은 불확실 (정확히 보려면 태어난 시간 필요).');
+  if (!a.genderGiven) warns.push('성별 미입력 → 남자로 가정함 (의사 인연 점수는 성별에 따라 달라짐).');
+
+  const lines = [];
+  lines.push('═══ 명식 계산 결과 (이 데이터에 근거해서만 답글 작성) ═══');
+  lines.push(`[입력] ${a.isLunar ? '음력' : '양력'} ${a.year}-${pad2(a.month)}-${pad2(a.day)} ${a.hourGiven ? pad2(a.hour)+':'+pad2(a.minute) : '(시 미상)'} / ${a.gender}`);
+  if (a.dst) lines.push(`[서머타임] 출생 시각이 서머타임 기간(UTC+${a.utcOffsetMin / 60}) → 1시간 빼고 계산`);
+  if (a.lonOff) {
+    lines.push('[진태양시 보정] 꺼짐(표준시 그대로) — 시지 경계가 시계 시각 기준' + (a.dst ? ' (서머타임만 제거)' : ''));
+  } else if (a.offsetMin !== 0) {
+    const b = a.solarBefore, c = a.solarAfter;
+    const shift = a.dateShifted ? `, ${c.year}-${pad2(c.month)}-${pad2(c.day)}로 날짜 넘어감` : '';
+    lines.push(`[진태양시 보정] ${a.lonLabel} → ${a.offsetMin}분 적용  (계산시각 ${pad2(b.hour)}:${pad2(b.minute)} → ${pad2(c.hour)}:${pad2(c.minute)}${shift})`);
+  }
+  lines.push('');
+  lines.push(SD.toPromptContext(result));
+  lines.push('');
+  lines.push('[오행 개수] (소수점 가중치 아님 — 실제 글자 개수로 풀이할 것)');
+  lines.push(['木','火','土','金','水'].map(k => `${k} ${counts.ohaeng[k]}개(${counts.ohaengGrade[k]})`).join(' / '));
+  if (counts.lacking.length) lines.push(`→ 아예 없는 오행: ${counts.lacking.join('·')}`);
+  lines.push('[십신 그룹 개수]');
+  lines.push(['비겁','식상','재성','관성','인성'].map(k => `${k} ${counts.shipsinGroup[k]}개(${counts.shipsinGroupGrade[k]})`).join(' / '));
+  if (counts.missingShipsin.length) lines.push(`→ 없는 십신: ${counts.missingShipsin.join('·')}`);
+  lines.push(`[신강/신약] ${counts.sinKangYak}`);
+  lines.push('');
+
+  // 신살 요약
+  const shinsalSummary = [];
+  ['year','month','day','hour'].forEach(k => {
+    const m = result.manse && result.manse[k];
+    if (m && m.shinsals && m.shinsals.length) {
+      const pos = { year:'연지', month:'월지', day:'일지', hour:'시지' }[k];
+      shinsalSummary.push(`${pos} ${m.branchKo}: ${m.shinsals.join('·')}`);
+    }
+  });
+  lines.push('[신살] ' + (shinsalSummary.length ? shinsalSummary.join(' / ') : '주요 신살 없음'));
+  const sibiLine = (key) => ['year','month','day','hour']
+    .map(k => result.manse && result.manse[k])
+    .map((m, i) => m && m.sibiShinsal ? `${['연지','월지','일지','시지'][i]} ${m.branchKo}: ${m.sibiShinsal[key]}` : null)
+    .filter(Boolean).join(' / ');
+  lines.push('[12신살·연지 기준] ' + sibiLine('byYear'));
+  lines.push('[12신살·일지 기준] ' + sibiLine('byDay'));
+  lines.push('');
+  lines.push('[사주닥터 점수]');
+  lines.push(`의대 적성: ${medScore}/100`);
+  lines.push(`의사 인연: ${marScore}/100  (${a.gender} 기준)`);
+  lines.push('');
+  lines.push('[일주] ' + result.palja.dayPillar.stem + result.palja.dayPillar.branch +
+    ' (' + KO.STEM_KO[result.palja.dayPillar.stem] + KO.BRANCH_KO[result.palja.dayPillar.branch] + ')');
+
+  if (warns.length) {
+    lines.push('');
+    lines.push('⚠ 주의: ' + warns.join(' / '));
+  }
+  return lines.join('\n');
+}
+
+module.exports = { compute, formatText, InputError };
+
+if (require.main === module) {
+  let out;
+  try {
+    out = compute(process.argv.slice(2));
+  } catch (e) {
+    if (!(e instanceof InputError)) throw e;
+    console.error('[입력 오류] ' + e.message);
+    console.error('예) node manse.cjs "2008-03-15 06:30 남"   /   node manse.cjs "1996-11-02 여 음력"');
+    process.exit(1);
+  }
+  console.log(out.input.json ? JSON.stringify(out, null, 2) : formatText(out));
+}
